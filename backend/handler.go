@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
-	"github.com/gorilla/sessions"
+	"github.com/rs/cors"
 )
 
-var store = sessions.NewCookieStore([]byte("secret"))
+var currentQuestion = 0
+var answersReq = make([]int, 0)
 
 type Question struct {
 	ID      int      `json:"id"`
@@ -26,64 +28,52 @@ var questions = []Question{
 
 func main() {
 	http.HandleFunc("/question", questionHandler)
-	http.HandleFunc("/nextQuestion", answerHandler)
-	http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/answer", answerHandler)
+
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowCredentials: true,
+	})
+
+	handler := c.Handler(http.DefaultServeMux)
+
+	http.ListenAndServe(":8080", handler)
 }
 
 func questionHandler(w http.ResponseWriter, r *http.Request) {
-	session, err := store.Get(r, "quiz-session")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	currentQuestionID, ok := session.Values["currentQuestion"].(int)
-	if !ok {
-		currentQuestionID = 0
-	}
-
-	if currentQuestionID >= len(questions) {
+	if currentQuestion >= len(questions) {
 		calculateResult(w, r)
 		return
 	}
 
-	json.NewEncoder(w).Encode(questions[currentQuestionID])
+	json.NewEncoder(w).Encode(questions[currentQuestion])
 
-	session.Values["currentQuestion"] = currentQuestionID + 1
-	session.Save(r, w)
+	currentQuestion++
 }
 
 func answerHandler(w http.ResponseWriter, r *http.Request) {
-	session, err := store.Get(r, "quiz-session")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	var question Question
-	err = json.NewDecoder(r.Body).Decode(&question)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&question)
 
-	session.Values["answers"] = append(session.Values["answers"].([]int), question.Answer)
-	session.Save(r, w)
+	json.NewEncoder(w).Encode(map[string]interface{}{"result": -1})
+
+	answersReq = append(answersReq, question.Answer)
 }
 
 func calculateResult(w http.ResponseWriter, r *http.Request) {
-	session, err := store.Get(r, "quiz-session")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	resultValue := 0
-	for i, answer := range session.Values["answers"].([]int) {
+	for i, answer := range answersReq {
 		if answer == questions[i].Answer {
 			resultValue++
 		}
 	}
+	fmt.Println(resultValue)
 
-	json.NewEncoder(w).Encode(map[string]interface{}{"result": resultValue})
+	json.NewEncoder(w).Encode(struct {
+		Result int `json:"result"`
+	}{
+		Result: resultValue,
+	})
 }
